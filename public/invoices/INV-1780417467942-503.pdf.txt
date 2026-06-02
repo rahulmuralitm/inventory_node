@@ -1,0 +1,20 @@
+========================================
+       AURA SUPERMARKET RECEIPT         
+========================================
+Invoice Number: INV-1780417467942-503
+Date/Time: 2/6/2026, 9:54:27 pm
+Branch ID: 18
+Cashier ID: 23
+Customer Name: Guest (9605028498)
+WhatsApp Mobile: 9605028498
+----------------------------------------
+Items List:
+- Product ID 69: Qty 1 @ ₹30.00 = ₹30
+----------------------------------------
+Subtotal:  ₹30.00
+Discount: -₹0.00
+Tax (GST): ₹0.00
+Total Paid: ₹30.00
+========================================
+Thank you for shopping with us!
+========================================

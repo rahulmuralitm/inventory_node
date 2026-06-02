@@ -154,6 +154,7 @@ async function initDb() {
       manage_expiry INTEGER DEFAULT 0,
       supplier_id INTEGER,
       unit VARCHAR(20) DEFAULT 'pc',
+      gst_rate ${numeric} DEFAULT 18.00,
       created_at ${datetime}
     )`,
 
@@ -258,6 +259,17 @@ async function initDb() {
       role VARCHAR(50) NOT NULL, -- 'Admin', 'Manager', 'Cashier', 'Warehouse Staff'
       branch_id INTEGER,
       created_at ${datetime}
+    )`,
+
+    // 14. Invoice History (WhatsApp vs Printed)
+    `CREATE TABLE IF NOT EXISTS invoice_history (
+      id ${serial},
+      invoice_number VARCHAR(100) NOT NULL UNIQUE,
+      customer_name VARCHAR(100),
+      mobile_number VARCHAR(20),
+      invoice_type VARCHAR(50) NOT NULL, -- 'Digital', 'Printed'
+      delivery_status VARCHAR(50) NOT NULL, -- 'Pending', 'Sent', 'Failed', 'Printed'
+      sent_at ${datetime}
     )`
   ];
 
@@ -273,6 +285,20 @@ async function initDb() {
   try {
     await execute("ALTER TABLE products ADD COLUMN unit VARCHAR(20) DEFAULT 'pc'");
     console.log("Migration: Added 'unit' column to 'products' table.");
+  } catch (err) {
+    // Column already exists, safe to ignore
+  }
+
+  try {
+    await execute("ALTER TABLE products ADD COLUMN gst_rate NUMERIC(5,2) DEFAULT 18.00");
+    console.log("Migration: Added 'gst_rate' column to 'products' table.");
+  } catch (err) {
+    // Column already exists, safe to ignore
+  }
+
+  try {
+    await execute("ALTER TABLE customers ADD COLUMN preferred_invoice_type VARCHAR(50) DEFAULT 'Printed'");
+    console.log("Migration: Added 'preferred_invoice_type' column to 'customers' table.");
   } catch (err) {
     // Column already exists, safe to ignore
   }

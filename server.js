@@ -2,7 +2,11 @@ const express = require('express');
 const cors = require('cors');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
+const fs = require('fs');
+const path = require('path');
 const db = require('./db');
+const { generateInvoicePDF } = require('./pdfGenerator');
+const { sendWhatsAppInvoice } = require('./whatsappService');
 require('dotenv').config();
 
 const app = express();
@@ -11,6 +15,7 @@ const JWT_SECRET = process.env.JWT_SECRET || 'fallback_secret_key';
 
 app.use(cors());
 app.use(express.json());
+app.use('/invoices', express.static(path.join(__dirname, 'public', 'invoices')));
 
 // Log incoming requests for debugging
 app.use((req, res, next) => {
@@ -22,7 +27,7 @@ app.use((req, res, next) => {
 function authenticateToken(req, res, next) {
   const authHeader = req.headers['authorization'];
   const token = authHeader && authHeader.split(' ')[1];
-  
+
   if (!token) {
     return res.status(401).json({ message: 'Authorization token required' });
   }
@@ -157,7 +162,7 @@ app.get('/api/audit-logs', authenticateToken, requireRoles('Admin', 'Manager'), 
 app.get('/api/dashboard/stats', authenticateToken, async (req, res) => {
   const branchId = req.query.branch_id || req.user.branch_id;
   const isSQLite = db.dbType === 'sqlite';
-  
+
   try {
     // 1. Sales Calculation (Today)
     let todaySalesQuery = `SELECT SUM(total) as revenue, SUM(subtotal - (cost_sum.total_cost)) as profit 
@@ -169,17 +174,17 @@ app.get('/api/dashboard/stats', authenticateToken, async (req, res) => {
                              GROUP BY sale_id
                            ) cost_sum ON s.id = cost_sum.sale_id
                            WHERE s.created_at >= $1`;
-                           
+
     const startOfToday = new Date();
-    startOfToday.setHours(0,0,0,0);
+    startOfToday.setHours(0, 0, 0, 0);
     const startOfTodayStr = isSQLite ? startOfToday.toISOString() : startOfToday;
-    
+
     let salesParams = [startOfTodayStr];
     if (branchId) {
       todaySalesQuery += " AND s.branch_id = $2";
       salesParams.push(branchId);
     }
-    
+
     const salesData = await db.getOne(todaySalesQuery, salesParams) || { revenue: 0, profit: 0 };
 
     // 2. Inventory Valuation (Sum of stock * cost_price)
@@ -299,7 +304,7 @@ app.get('/api/products', authenticateToken, async (req, res) => {
   try {
     const products = await db.query(
       `SELECT p.id, p.name, p.sku, p.barcode, p.description, p.cost_price, p.sale_price, p.image_url, 
-              p.is_variant, p.parent_product_id, p.manage_expiry, p.supplier_id, p.unit,
+              p.is_variant, p.parent_product_id, p.manage_expiry, p.supplier_id, p.unit, p.gst_rate,
               c.name as category_name, c.id as category_id, s.name as supplier_name
        FROM products p 
        LEFT JOIN categories c ON p.category_id = c.id
@@ -314,8 +319,8 @@ app.get('/api/products', authenticateToken, async (req, res) => {
 
 // Add Product
 app.post('/api/products', authenticateToken, requireRoles('Admin', 'Manager'), async (req, res) => {
-  const { name, sku, barcode, description, category_id, cost_price, sale_price, image_url, manage_expiry, supplier_id, initial_stock, branch_id, unit } = req.body;
-  
+  const { name, sku, barcode, description, category_id, cost_price, sale_price, image_url, manage_expiry, supplier_id, initial_stock, branch_id, unit, gst_rate } = req.body;
+
   if (!name || !cost_price || !sale_price) {
     return res.status(400).json({ message: 'Name, cost price, and sale price are required' });
   }
@@ -328,31 +333,34 @@ app.post('/api/products', authenticateToken, requireRoles('Admin', 'Manager'), a
   try {
     // Insert into Products
     const result = await db.execute(
-      `INSERT INTO products (name, sku, barcode, description, category_id, cost_price, sale_price, image_url, manage_expiry, supplier_id, unit) 
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
-      [name, parsedSku, parsedBarcode, description || '', category_id || null, cost_price, sale_price, image_url || 'assets/images/products/placeholder.jpg', manage_expiry ? 1 : 0, supplier_id || null, unit || 'pc']
+      `INSERT INTO products (name, sku, barcode, description, category_id, cost_price, sale_price, image_url, manage_expiry, supplier_id, unit, gst_rate) 
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+      [name, parsedSku, parsedBarcode, description || '', category_id || null, cost_price, sale_price, image_url || 'assets/images/products/placeholder.jpg', manage_expiry ? 1 : 0, supplier_id || null, unit || 'pc', gst_rate !== undefined ? parseFloat(gst_rate) : 18.00]
     );
 
     const productId = result.insertId || (await db.getOne("SELECT id FROM products WHERE sku = $1", [parsedSku])).id;
-    
+
     // Seed initial inventory level
-    if (initial_stock && initial_stock > 0) {
+    const parsedStock = initial_stock ? parseFloat(initial_stock) : 0;
+    const parsedBranchId = bId ? parseInt(bId, 10) : 1;
+
+    if (parsedStock > 0) {
       await db.execute(
         `INSERT INTO inventory (product_id, branch_id, quantity, reorder_level, batch_number, expiry_date, location_identifier)
          VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-        [productId, bId, initial_stock, 10, 'BAT-INIT-' + Math.floor(100 + Math.random() * 900), manage_expiry ? new Date(Date.now() + 180 * 24 * 60 * 60 * 1000).toISOString().split('T')[0] : null, 'Aisle 1']
+        [productId, parsedBranchId, parsedStock, 10, 'BAT-INIT-' + Math.floor(100 + Math.random() * 900), manage_expiry ? new Date(Date.now() + 180 * 24 * 60 * 60 * 1000).toISOString().split('T')[0] : null, 'Aisle 1']
       );
 
       // Log the Stock In movement
       await db.execute(
         `INSERT INTO stock_movements (product_id, to_branch_id, quantity, movement_type, reference_no, created_by)
          VALUES ($1, $2, $3, $4, $5, $6)`,
-        [productId, bId, initial_stock, 'Stock In', 'Initial Seeding', req.user.id]
+        [productId, parsedBranchId, parsedStock, 'Stock In', 'Initial Seeding', req.user.id]
       );
     }
 
     await logActivity(req.user.id, 'Add Product', `Added Product: ${name} (SKU: ${parsedSku})`);
-    
+
     res.status(201).json({ message: 'Product added successfully', id: productId });
   } catch (err) {
     res.status(500).json({ message: 'Add product error', error: err.message });
@@ -362,13 +370,13 @@ app.post('/api/products', authenticateToken, requireRoles('Admin', 'Manager'), a
 // Edit Product
 app.put('/api/products/:id', authenticateToken, requireRoles('Admin', 'Manager'), async (req, res) => {
   const { id } = req.params;
-  const { name, sku, barcode, description, category_id, cost_price, sale_price, image_url, manage_expiry, supplier_id, unit } = req.body;
+  const { name, sku, barcode, description, category_id, cost_price, sale_price, image_url, manage_expiry, supplier_id, unit, gst_rate } = req.body;
 
   try {
     await db.execute(
-      `UPDATE products SET name = $1, sku = $2, barcode = $3, description = $4, category_id = $5, cost_price = $6, sale_price = $7, image_url = $8, manage_expiry = $9, supplier_id = $10, unit = $11 
-       WHERE id = $12`,
-      [name, sku, barcode, description, category_id, cost_price, sale_price, image_url, manage_expiry ? 1 : 0, supplier_id, unit || 'pc', id]
+      `UPDATE products SET name = $1, sku = $2, barcode = $3, description = $4, category_id = $5, cost_price = $6, sale_price = $7, image_url = $8, manage_expiry = $9, supplier_id = $10, unit = $11, gst_rate = $12 
+       WHERE id = $13`,
+      [name, sku, barcode, description, category_id, cost_price, sale_price, image_url, manage_expiry ? 1 : 0, supplier_id, unit || 'pc', gst_rate !== undefined ? parseFloat(gst_rate) : 18.00, id]
     );
 
     await logActivity(req.user.id, 'Edit Product', `Updated Product ID: ${id} (${name})`);
@@ -386,10 +394,10 @@ app.delete('/api/products/:id', authenticateToken, requireRoles('Admin'), async 
     if (!product) {
       return res.status(404).json({ message: 'Product not found' });
     }
-    
+
     await db.execute("DELETE FROM products WHERE id = $1", [id]);
     await db.execute("DELETE FROM inventory WHERE product_id = $1", [id]);
-    
+
     await logActivity(req.user.id, 'Delete Product', `Deleted Product: ${product.name} (ID: ${id})`);
     res.json({ message: 'Product deleted successfully' });
   } catch (err) {
@@ -486,17 +494,17 @@ app.put('/api/inventory/:id', authenticateToken, requireRoles('Admin', 'Manager'
     // Record stock movement if quantity changed
     if (qty !== oldQty) {
       const difference = qty - oldQty;
-      
+
       await db.execute(
         `INSERT INTO stock_movements (product_id, from_branch_id, to_branch_id, quantity, movement_type, reference_no, created_by)
          VALUES ($1, $2, $3, $4, $5, $6, $7)`,
         [
-          inv.product_id, 
-          difference < 0 ? inv.branch_id : null, 
-          difference > 0 ? inv.branch_id : null, 
-          Math.abs(difference), 
-          'Adjustment', 
-          `EDIT-REC-${invId}`, 
+          inv.product_id,
+          difference < 0 ? inv.branch_id : null,
+          difference > 0 ? inv.branch_id : null,
+          Math.abs(difference),
+          'Adjustment',
+          `EDIT-REC-${invId}`,
           req.user.id
         ]
       );
@@ -512,7 +520,7 @@ app.put('/api/inventory/:id', authenticateToken, requireRoles('Admin', 'Manager'
 // Stock Adjustments / Transfer / In / Out
 app.post('/api/inventory/movement', authenticateToken, requireRoles('Admin', 'Manager', 'Warehouse Staff'), async (req, res) => {
   const { product_id, from_branch_id, to_branch_id, quantity, movement_type, reference_no, batch_number, expiry_date, location_identifier } = req.body;
-  
+
   if (!product_id || !quantity || !movement_type) {
     return res.status(400).json({ message: 'Product ID, quantity, and movement type are required' });
   }
@@ -590,7 +598,7 @@ app.post('/api/inventory/movement', authenticateToken, requireRoles('Admin', 'Ma
     );
 
     await logActivity(req.user.id, 'Stock Movement', `${movement_type}: Qty ${qty} of Product ID: ${product_id} (${ref})`);
-    
+
     res.json({ message: 'Stock movement successfully updated' });
   } catch (err) {
     res.status(500).json({ message: 'Stock movement error', error: err.message });
@@ -620,10 +628,108 @@ app.get('/api/inventory/movements', authenticateToken, async (req, res) => {
 
 // --- MODULE 5: POS & BILLING SYSTEM ---
 
+// Reusable WhatsApp PDF generation & delivery handler (uses Meta API or falls back to simulation)
+async function processWhatsAppDelivery(invoiceNumber, mobileNumber, reqUser) {
+  const invoicesDir = path.join(__dirname, 'public', 'invoices');
+  if (!fs.existsSync(invoicesDir)) {
+    fs.mkdirSync(invoicesDir, { recursive: true });
+  }
+
+  const filePath = path.join(invoicesDir, `${invoiceNumber}.pdf`);
+
+  if (!fs.existsSync(filePath)) {
+    console.log(`[WhatsApp Delivery] PDF not found for ${invoiceNumber}. Generating now...`);
+    // Retrieve sale data from database
+    const sale = await db.getOne("SELECT * FROM sales WHERE invoice_number = $1", [invoiceNumber]);
+    if (!sale) {
+      throw new Error(`Sale not found for invoice number: ${invoiceNumber}`);
+    }
+
+    // Retrieve sale items
+    const saleItems = await db.query(
+      `SELECT si.quantity, si.unit_price, si.subtotal,
+              p.name as name, p.sku, p.unit, p.gst_rate
+       FROM sale_items si
+       JOIN products p ON si.product_id = p.id
+       WHERE si.sale_id = $1`,
+      [sale.id]
+    );
+
+    // Retrieve cashier info
+    let cashierName = 'Terminal Operator';
+    const cashier = await db.getOne("SELECT username FROM users WHERE id = $1", [sale.cashier_id]);
+    if (cashier) cashierName = cashier.username;
+
+    // Retrieve branch info
+    let branchName = 'Central Outlet';
+    const branch = await db.getOne("SELECT name FROM branches WHERE id = $1", [sale.branch_id]);
+    if (branch) branchName = branch.name;
+
+    // Retrieve customer details
+    let customerName = 'Anonymous';
+    if (sale.customer_id) {
+      const cust = await db.getOne("SELECT name FROM customers WHERE id = $1", [sale.customer_id]);
+      if (cust) customerName = cust.name;
+    }
+
+    // Generate PDF
+    await generateInvoicePDF({
+      invoice_number: invoiceNumber,
+      date: new Date(sale.created_at || Date.now()).toLocaleString(),
+      branch_name: branchName,
+      cashier_name: cashierName,
+      customer_name: customerName,
+      mobile_number: mobileNumber,
+      subtotal: parseFloat(sale.subtotal),
+      discount: parseFloat(sale.discount),
+      tax: parseFloat(sale.tax),
+      total: parseFloat(sale.total),
+      payment_method: sale.payment_method,
+      points_earned: sale.customer_id ? Math.floor(parseFloat(sale.total) / 100) : 0
+    }, saleItems, filePath);
+  }
+
+  // 2. Dispatch message using Meta WhatsApp API
+  const phoneId = process.env.WHATSAPP_PHONE_NUMBER_ID;
+  const accessToken = process.env.WHATSAPP_ACCESS_TOKEN;
+  const pdfUrl = `http://localhost:3000/invoices/${invoiceNumber}.pdf`;
+
+  let status = 'Failed';
+  if (phoneId && accessToken) {
+    const apiSuccess = await sendWhatsAppInvoice(mobileNumber, invoiceNumber, pdfUrl);
+    status = apiSuccess ? 'Sent' : 'Failed';
+  } else {
+    console.log('[WhatsApp Delivery] WhatsApp API credentials missing. Simulating 90% delivery rate...');
+    await new Promise(resolve => setTimeout(resolve, 2000));
+    const success = Math.random() < 0.90;
+    status = success ? 'Sent' : 'Failed';
+  }
+
+  // 3. Update database
+  await db.execute(
+    "UPDATE invoice_history SET delivery_status = $1, mobile_number = $2, invoice_type = 'Digital' WHERE invoice_number = $3",
+    [status, mobileNumber, invoiceNumber]
+  );
+
+  // 4. Log audit log
+  await db.execute(
+    "INSERT INTO audit_logs (user_id, action, details) VALUES ($1, $2, $3)",
+    [reqUser.id, 'WhatsApp Delivery', `WhatsApp Meta API delivery status for ${invoiceNumber} to ${mobileNumber}: ${status}`]
+  );
+
+  return status;
+}
+app.post('/webhook', (req, res) => {
+  console.log('WEBHOOK EVENT');
+  console.log(JSON.stringify(req.body, null, 2));
+  res.sendStatus(200);
+});
 // POS Checkout
 app.post('/api/pos/checkout', authenticateToken, async (req, res) => {
-  const { customer_id, items, discount, payment_method, branch_id } = req.body;
+  const { customer_id, items, discount, payment_method, branch_id, invoice_type, mobile_number } = req.body;
   const branchId = branch_id || req.user.branch_id || 1; // Default cashier branch
+  const invoiceType = invoice_type || 'Printed';
+  const mobileNumber = mobile_number || '';
 
   if (!items || items.length === 0) {
     return res.status(400).json({ message: 'Purchase items are required' });
@@ -633,9 +739,10 @@ app.post('/api/pos/checkout', authenticateToken, async (req, res) => {
     // 1. Calculate prices
     let subtotal = 0;
     const itemDetails = [];
+    const itemsList = [];
 
     for (const item of items) {
-      const prod = await db.getOne("SELECT id, name, sale_price, cost_price FROM products WHERE id = $1", [item.product_id]);
+      const prod = await db.getOne("SELECT id, name, sku, sale_price, cost_price, gst_rate, unit FROM products WHERE id = $1", [item.product_id]);
       if (!prod) {
         return res.status(400).json({ message: `Product ID ${item.product_id} not found.` });
       }
@@ -645,7 +752,7 @@ app.post('/api/pos/checkout', authenticateToken, async (req, res) => {
         "SELECT * FROM inventory WHERE product_id = $1 AND branch_id = $2 AND quantity >= $3 ORDER BY expiry_date ASC",
         [item.product_id, branchId, item.quantity]
       );
-      
+
       let remainingToDeduct = item.quantity;
       if (inv.length === 0) {
         // Find if any stock exists at all
@@ -658,27 +765,49 @@ app.post('/api/pos/checkout', authenticateToken, async (req, res) => {
       for (const batch of inv) {
         if (remainingToDeduct <= 0) break;
         const deductQty = Math.min(batch.quantity, remainingToDeduct);
-        
+
         // Push batch details for audit trail
         itemDetails.push({
           product_id: prod.id,
+          name: prod.name,
+          sku: prod.sku,
           quantity: deductQty,
           unit_price: prod.sale_price,
           subtotal: prod.sale_price * deductQty,
           inventory_id: batch.id,
-          batch_number: batch.batch_number
+          batch_number: batch.batch_number,
+          unit: prod.unit,
+          gst_rate: prod.gst_rate
         });
 
         remainingToDeduct -= deductQty;
       }
-      
-      subtotal += prod.sale_price * item.quantity;
+
+      const itemSubtotal = prod.sale_price * item.quantity;
+      subtotal += itemSubtotal;
+
+      const itemGstRate = prod.gst_rate !== undefined && prod.gst_rate !== null ? parseFloat(prod.gst_rate) : 18.00;
+      itemsList.push({
+        itemSubtotal: itemSubtotal,
+        gstRate: itemGstRate
+      });
     }
 
     const discAmount = parseFloat(discount || 0);
-    const taxAmount = parseFloat(((subtotal - discAmount) * 0.18).toFixed(2)); // Standard 18% GST
-    const totalAmount = parseFloat((subtotal - discAmount + taxAmount).toFixed(2));
-    
+
+    // Dynamic GST calculation with proportionate discount distribution
+    let taxAmount = 0;
+    if (subtotal > 0) {
+      for (const itemEntry of itemsList) {
+        const itemDiscount = discAmount * (itemEntry.itemSubtotal / subtotal);
+        const itemDiscountedSubtotal = Math.max(0, itemEntry.itemSubtotal - itemDiscount);
+        const itemTax = itemDiscountedSubtotal * (itemEntry.gstRate / 100);
+        taxAmount += itemTax;
+      }
+    }
+    taxAmount = parseFloat(taxAmount.toFixed(2));
+    const totalAmount = parseFloat((Math.max(0, subtotal - discAmount) + taxAmount).toFixed(2));
+
     // 2. Generate unique Invoice Number
     const invNo = `INV-${Date.now()}-${Math.floor(100 + Math.random() * 900)}`;
 
@@ -713,17 +842,46 @@ app.post('/api/pos/checkout', authenticateToken, async (req, res) => {
       );
     }
 
-    // 5. Loyalty rewards logic (1 point per ₹100 spent)
+    // 5. Loyalty rewards logic (1 point per ₹100 spent) & Preference memory
+    let customerName = 'Anonymous';
     if (customer_id) {
       const addedPoints = Math.floor(totalAmount / 100);
       await db.execute(
-        "UPDATE customers SET loyalty_points = loyalty_points + $1 WHERE id = $2",
-        [addedPoints, customer_id]
+        "UPDATE customers SET loyalty_points = loyalty_points + $1, preferred_invoice_type = $2 WHERE id = $3",
+        [addedPoints, invoiceType, customer_id]
       );
+
+      const cust = await db.getOne("SELECT name FROM customers WHERE id = $1", [customer_id]);
+      if (cust) {
+        customerName = cust.name;
+      }
+    } else if (mobileNumber) {
+      customerName = `Guest (${mobileNumber})`;
+    }
+
+    // 6. Record Invoice History
+    const deliveryStatus = invoiceType === 'Printed' ? 'Printed' : 'Pending';
+    await db.execute(
+      `INSERT INTO invoice_history (invoice_number, customer_name, mobile_number, invoice_type, delivery_status)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [invNo, customerName, mobileNumber, invoiceType, deliveryStatus]
+    );
+
+    // 7. Async WhatsApp Dispatcher & real PDF generator
+    if (invoiceType === 'Digital') {
+      setTimeout(async () => {
+        try {
+          console.log(`[WhatsApp Delivery] Dispatching asynchronous WhatsApp dispatch process for ${invNo}...`);
+          const status = await processWhatsAppDelivery(invNo, mobileNumber, req.user);
+          console.log(`[WhatsApp Delivery] Completed async dispatch for ${invNo}. Result: ${status}`);
+        } catch (err) {
+          console.error(`[WhatsApp Delivery] Async delivery error for ${invNo}:`, err);
+        }
+      }, 100);
     }
 
     await logActivity(req.user.id, 'POS Checkout', `Completed Sale Invoice: ${invNo} (Total: ₹${totalAmount})`);
-    
+
     res.status(201).json({
       message: 'Checkout successful',
       invoice_number: invNo,
@@ -732,10 +890,79 @@ app.post('/api/pos/checkout', authenticateToken, async (req, res) => {
       discount: discAmount,
       tax: taxAmount,
       total: totalAmount,
-      points_earned: customer_id ? Math.floor(totalAmount / 100) : 0
+      points_earned: customer_id ? Math.floor(totalAmount / 100) : 0,
+      invoice_type: invoiceType,
+      delivery_status: deliveryStatus
     });
   } catch (err) {
     res.status(500).json({ message: 'Checkout error', error: err.message });
+  }
+});
+
+// 1. Get Delivery Status of Invoice
+app.get('/api/pos/invoices/:invoice_number/status', authenticateToken, async (req, res) => {
+  const { invoice_number } = req.params;
+  try {
+    const statusRecord = await db.getOne(
+      "SELECT invoice_number, customer_name, mobile_number, invoice_type, delivery_status, sent_at FROM invoice_history WHERE invoice_number = $1",
+      [invoice_number]
+    );
+    if (!statusRecord) {
+      return res.status(404).json({ message: 'Invoice delivery status not found' });
+    }
+    res.json(statusRecord);
+  } catch (err) {
+    res.status(500).json({ message: 'Error checking status', error: err.message });
+  }
+});
+
+// 2. Retry WhatsApp Dispatch
+app.post('/api/pos/invoices/:invoice_number/retry', authenticateToken, async (req, res) => {
+  const { invoice_number } = req.params;
+  const { mobile_number } = req.body;
+  try {
+    const record = await db.getOne("SELECT * FROM invoice_history WHERE invoice_number = $1", [invoice_number]);
+    if (!record) {
+      return res.status(404).json({ message: 'Invoice not found in history logs' });
+    }
+
+    const targetMobile = mobile_number || record.mobile_number;
+    if (!targetMobile) {
+      return res.status(400).json({ message: 'Mobile number is required to send WhatsApp invoice' });
+    }
+
+    // Reset status to Pending in DB
+    await db.execute(
+      "UPDATE invoice_history SET delivery_status = 'Pending', mobile_number = $1 WHERE invoice_number = $2",
+      [targetMobile, invoice_number]
+    );
+
+    // Re-trigger WhatsApp Dispatcher
+    setTimeout(async () => {
+      try {
+        console.log(`[WhatsApp Retry] Re-dispatching WhatsApp process for ${invoice_number}...`);
+        const status = await processWhatsAppDelivery(invoice_number, targetMobile, req.user);
+        console.log(`[WhatsApp Retry] Completed retry async dispatch for ${invoice_number}. Result: ${status}`);
+      } catch (err) {
+        console.error(`[WhatsApp Retry] Async retry error for ${invoice_number}:`, err);
+      }
+    }, 100);
+
+    res.json({ message: 'Retry initiated successfully', delivery_status: 'Pending' });
+  } catch (err) {
+    res.status(500).json({ message: 'Error initiating retry', error: err.message });
+  }
+});
+
+// 3. List Invoice Delivery History logs
+app.get('/api/pos/invoice-history', authenticateToken, async (req, res) => {
+  try {
+    const list = await db.query(
+      "SELECT id, invoice_number, customer_name, mobile_number, invoice_type, delivery_status, sent_at FROM invoice_history ORDER BY sent_at DESC LIMIT 100"
+    );
+    res.json(list);
+  } catch (err) {
+    res.status(500).json({ message: 'Error fetching invoice delivery logs', error: err.message });
   }
 });
 
@@ -759,11 +986,12 @@ app.post('/api/customers', authenticateToken, async (req, res) => {
     return res.status(400).json({ message: 'Name and Phone are required' });
   }
   try {
-    await db.execute(
+    const result = await db.execute(
       "INSERT INTO customers (name, phone, email, loyalty_points, outstanding_payment) VALUES ($1, $2, $3, 0, 0)",
       [name, phone, email || '']
     );
-    res.status(201).json({ message: 'Customer added successfully' });
+    const customerId = result.insertId || (await db.getOne("SELECT id FROM customers WHERE phone = $1", [phone])).id;
+    res.status(201).json({ message: 'Customer added successfully', id: customerId });
   } catch (err) {
     res.status(500).json({ message: 'Create customer error', error: err.message });
   }
@@ -913,7 +1141,7 @@ app.post('/api/purchase-orders/:id/receive', authenticateToken, requireRoles('Ad
 
     // Update PO Status
     await db.execute("UPDATE purchase_orders SET status = 'Received' WHERE id = $1", [id]);
-    
+
     // Add to Supplier outstanding debt
     await db.execute(
       "UPDATE suppliers SET outstanding_balance = outstanding_balance + $1 WHERE id = $2",
@@ -1011,16 +1239,16 @@ app.get('/api/analytics/forecast', authenticateToken, async (req, res) => {
 
     // Project next 3 months (Indices: n+1, n+2, n+3)
     const forecast = [];
-    const lastMonth = new Date(salesHistory[n-1].month_label + "-15"); // Mid-month anchor
+    const lastMonth = new Date(salesHistory[n - 1].month_label + "-15"); // Mid-month anchor
 
     for (let j = 1; j <= 3; j++) {
       const targetIndex = n + j;
       const predictedRevenue = Math.max(0, slope * targetIndex + intercept);
-      
+
       const futureMonth = new Date(lastMonth);
       futureMonth.setMonth(futureMonth.getMonth() + j);
-      
-      const label = futureMonth.toISOString().substring(0,7);
+
+      const label = futureMonth.toISOString().substring(0, 7);
       forecast.push({
         month_label: label,
         predicted_revenue: parseFloat(predictedRevenue.toFixed(2)),
@@ -1045,7 +1273,7 @@ app.get('/api/analytics/forecast', authenticateToken, async (req, res) => {
     `;
     const fastParams = branchId ? [dateStr, branchId] : [dateStr];
     const salesByProd = await db.query(fastQuery, fastParams);
-    
+
     const grandTotal = salesByProd.reduce((acc, row) => acc + parseFloat(row.total_sales), 0);
     let cumulative = 0;
     const fastMoving = [];

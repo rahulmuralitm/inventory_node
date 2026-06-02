@@ -131,24 +131,24 @@ async function seed() {
 
   // 6. Seed Products
   console.log('Seeding products...');
-  // Format: [name, sku, barcode, description, category_id, cost_price, sale_price, image_url, is_variant, parent, manage_expiry, supplier_id, unit]
+  // Format: [name, sku, barcode, description, category_id, cost_price, sale_price, image_url, is_variant, parent_product_id, manage_expiry, supplier_id, unit, gst_rate]
   const prodData = [
-    ["Wireless Mechanical Keyboard", "SKU-KBD-WRLS", "880123456789", "Premium rgb tactile wireless mechanical keyboard.", elecId, 2500.00, 5499.00, "assets/images/products/keyboard.jpg", 0, null, 0, apexId, "pc"],
-    ["USB-C Fast Charger 65W", "SKU-CHG-65WC", "880123456790", "GaN technology ultra-fast travel charger.", elecId, 850.00, 1999.00, "assets/images/products/charger.jpg", 0, null, 0, apexId, "pc"],
-    ["Organic Almond Milk 1L", "SKU-GOC-AM1L", "880123456791", "Sugar-free unsweetened organic almond milk.", grocId, 150.00, 299.00, "assets/images/products/almond_milk.jpg", 0, null, 1, acmeId, "pc"],
-    ["Premium Arabica Coffee Beans 1kg", "SKU-GOC-CF1K", "880123456792", "Medium roast single origin organic Arabica beans.", grocId, 800.00, 1650.00, "assets/images/products/coffee.jpg", 0, null, 1, acmeId, "pc"],
-    ["Paracetamol 500mg (100 Tabs)", "SKU-MED-PARA", "880123456793", "Analgesic and antipyretic pain reliever.", pharmId, 60.00, 150.00, "assets/images/products/paracetamol.jpg", 0, null, 1, medlifeId, "pc"],
-    ["Vitamin C 1000mg Chewable", "SKU-MED-VITC", "880123456794", "Immune support antioxidant chewables (90 count).", pharmId, 180.00, 450.00, "assets/images/products/vit_c.jpg", 0, null, 1, medlifeId, "pc"],
-    ["Cotton Crewneck T-Shirt Black (M)", "SKU-APL-TS-BLK-M", "880123456795", "100% organic cotton crewneck tee.", appId, 350.00, 899.00, "assets/images/products/tshirt.jpg", 1, null, 0, acmeId, "pc"],
-    ["Cotton Crewneck T-Shirt Black (L)", "SKU-APL-TS-BLK-L", "880123456796", "100% organic cotton crewneck tee.", appId, 350.00, 899.00, "assets/images/products/tshirt.jpg", 1, null, 0, acmeId, "pc"],
-    ["Organic Vine Tomatoes", "SKU-GOC-VMTM", "880123456797", "Fresh farm organic vine tomatoes.", grocId, 30.00, 60.00, "assets/images/products/tomatoes.jpg", 0, null, 1, acmeId, "kg"],
-    ["Fresh Spinach Bunch", "SKU-GOC-SPNH", "880123456798", "Organic washed green spinach leaves.", grocId, 15.00, 30.00, "assets/images/products/spinach.jpg", 0, null, 1, acmeId, "kg"]
+    ["Wireless Mechanical Keyboard", "SKU-KBD-WRLS", "880123456789", "Premium rgb tactile wireless mechanical keyboard.", elecId, 2500.00, 5499.00, "assets/images/products/keyboard.jpg", 0, null, 0, apexId, "pc", 18.00],
+    ["USB-C Fast Charger 65W", "SKU-CHG-65WC", "880123456790", "GaN technology ultra-fast travel charger.", elecId, 850.00, 1999.00, "assets/images/products/charger.jpg", 0, null, 0, apexId, "pc", 18.00],
+    ["Organic Almond Milk 1L", "SKU-GOC-AM1L", "880123456791", "Sugar-free unsweetened organic almond milk.", grocId, 150.00, 299.00, "assets/images/products/almond_milk.jpg", 0, null, 1, acmeId, "pc", 5.00],
+    ["Premium Arabica Coffee Beans 1kg", "SKU-GOC-CF1K", "880123456792", "Medium roast single origin organic Arabica beans.", grocId, 800.00, 1650.00, "assets/images/products/coffee.jpg", 0, null, 1, acmeId, "pc", 12.00],
+    ["Paracetamol 500mg (100 Tabs)", "SKU-MED-PARA", "880123456793", "Analgesic and antipyretic pain reliever.", pharmId, 60.00, 150.00, "assets/images/products/paracetamol.jpg", 0, null, 1, medlifeId, "pc", 12.00],
+    ["Vitamin C 1000mg Chewable", "SKU-MED-VITC", "880123456794", "Immune support antioxidant chewables (90 count).", pharmId, 180.00, 450.00, "assets/images/products/vit_c.jpg", 0, null, 1, medlifeId, "pc", 12.00],
+    ["Cotton Crewneck T-Shirt Black (M)", "SKU-APL-TS-BLK-M", "880123456795", "100% organic cotton crewneck tee.", appId, 350.00, 899.00, "assets/images/products/tshirt.jpg", 1, null, 0, acmeId, "pc", 5.00],
+    ["Cotton Crewneck T-Shirt Black (L)", "SKU-APL-TS-BLK-L", "880123456796", "100% organic cotton crewneck tee.", appId, 350.00, 899.00, "assets/images/products/tshirt.jpg", 1, null, 0, acmeId, "pc", 5.00],
+    ["Organic Vine Tomatoes", "SKU-GOC-VMTM", "880123456797", "Fresh farm organic vine tomatoes.", grocId, 30.00, 60.00, "assets/images/products/tomatoes.jpg", 0, null, 1, acmeId, "kg", 0.00],
+    ["Fresh Spinach Bunch", "SKU-GOC-SPNH", "880123456798", "Organic washed green spinach leaves.", grocId, 15.00, 30.00, "assets/images/products/spinach.jpg", 0, null, 1, acmeId, "kg", 0.00]
   ];
 
   for (const p of prodData) {
     await db.execute(
-      `INSERT INTO products (name, sku, barcode, description, category_id, cost_price, sale_price, image_url, is_variant, parent_product_id, manage_expiry, supplier_id, unit) 
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
+      `INSERT INTO products (name, sku, barcode, description, category_id, cost_price, sale_price, image_url, is_variant, parent_product_id, manage_expiry, supplier_id, unit, gst_rate) 
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
       p
     );
   }
@@ -258,10 +258,10 @@ async function seed() {
       // Determine items in sale
       const items = [];
       const itemSelection = [
-        { id: kbdId, price: 89.99, cost: 45.00 },
-        { id: chgId, price: 29.99, cost: 12.50 },
-        { id: coffeeId, price: 19.99, cost: 8.50 },
-        { id: paraId, price: 8.50, cost: 3.20 }
+        { id: kbdId, price: 89.99, cost: 45.00, gst_rate: 18.00 },
+        { id: chgId, price: 29.99, cost: 12.50, gst_rate: 18.00 },
+        { id: coffeeId, price: 19.99, cost: 8.50, gst_rate: 12.00 },
+        { id: paraId, price: 8.50, cost: 3.20, gst_rate: 12.00 }
       ];
 
       // Add 1 to 3 items
@@ -283,7 +283,18 @@ async function seed() {
       }
 
       const discount = Math.random() < 0.3 ? parseFloat((subtotal * 0.1).toFixed(2)) : 0;
-      const tax = parseFloat(((subtotal - discount) * 0.18).toFixed(2)); // 18% GST standard
+      
+      let tax = 0;
+      if (subtotal > 0) {
+        for (const item of items) {
+          const itemDiscount = discount * (item.subtotal / subtotal);
+          const itemDiscountedSubtotal = Math.max(0, item.subtotal - itemDiscount);
+          const itemEntry = itemSelection.find(x => x.id === item.product_id);
+          const itemTax = itemDiscountedSubtotal * (itemEntry.gst_rate / 100);
+          tax += itemTax;
+        }
+      }
+      tax = parseFloat(tax.toFixed(2));
       const total = parseFloat((subtotal - discount + tax).toFixed(2));
       const payMethod = ["Cash", "Card", "UPI", "Net Banking"][Math.floor(Math.random() * 4)];
       
