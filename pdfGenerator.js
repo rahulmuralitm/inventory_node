@@ -156,11 +156,12 @@ function generateInvoicePDF(invoice, items, filePath) {
 
         doc.fillColor(darkColor);
         
-        // Item Name & SKU
+        // Item Name & SKU/HSN
         doc.font('Helvetica-Bold')
            .text(item.name || 'Product Details', 60, currentY + 6, { width: 210, height: 12, ellipsis: true });
         
-        const skuStr = item.sku ? `SKU: ${item.sku}` : '';
+        const hsnStr = item.hsn_code || 'HSN-9988';
+        const skuStr = `SKU: ${item.sku || 'N/A'} | HSN: ${hsnStr}`;
         doc.font('Helvetica')
            .fillColor(textMuted)
            .fontSize(8)
@@ -177,8 +178,10 @@ function generateInvoicePDF(invoice, items, filePath) {
         const unitPriceStr = `₹${parseFloat(item.unit_price).toFixed(2)}`;
         doc.text(unitPriceStr, 330, currentY + 6, { width: 70, align: 'right' });
 
-        // GST Rate
-        const gstRateFormatted = item.gst_rate !== undefined ? `${parseFloat(item.gst_rate)}%` : '18%';
+        // GST Rate (Split CGST + SGST representation)
+        const totalGst = item.gst_rate !== undefined ? parseFloat(item.gst_rate) : 18.00;
+        const splitGst = totalGst / 2;
+        const gstRateFormatted = `${splitGst}%+${splitGst}%`;
         doc.text(gstRateFormatted, 410, currentY + 6, { width: 50, align: 'right' });
 
         // Subtotal
@@ -209,16 +212,52 @@ function generateInvoicePDF(invoice, items, filePath) {
       doc.font('Helvetica').text(`₹${parseFloat(invoice.subtotal).toFixed(2)}`, 450, currentY, { width: 90, align: 'right' });
       currentY += 16;
 
-      // Discount Row (if any)
-      if (parseFloat(invoice.discount) > 0) {
-        doc.font('Helvetica-Bold').fillColor('#b91c1c').text('Discount:', summaryX, currentY);
-        doc.font('Helvetica').text(`-₹${parseFloat(invoice.discount).toFixed(2)}`, 450, currentY, { width: 90, align: 'right' });
+      // Loyalty Tier Discount Row (if any)
+      if (invoice.tier_discount && parseFloat(invoice.tier_discount) > 0) {
+        doc.font('Helvetica-Bold').fillColor(secondaryColor).text('Loyalty Tier Discount:', summaryX, currentY);
+        doc.font('Helvetica').fillColor(darkColor).text(`-₹${parseFloat(invoice.tier_discount).toFixed(2)}`, 450, currentY, { width: 90, align: 'right' });
         currentY += 16;
       }
 
-      // GST Row
-      doc.font('Helvetica-Bold').fillColor(darkColor).text('Tax (GST):', summaryX, currentY);
-      doc.font('Helvetica').text(`₹${parseFloat(invoice.tax).toFixed(2)}`, 450, currentY, { width: 90, align: 'right' });
+      // Promo Savings Row (if any)
+      if (invoice.promo_discount && parseFloat(invoice.promo_discount) > 0) {
+        doc.font('Helvetica-Bold').fillColor(secondaryColor).text('Promo Savings:', summaryX, currentY);
+        doc.font('Helvetica').fillColor(darkColor).text(`-₹${parseFloat(invoice.promo_discount).toFixed(2)}`, 450, currentY, { width: 90, align: 'right' });
+        currentY += 16;
+      }
+
+      // Coupon Discount Row (if any)
+      if (invoice.coupon_discount && parseFloat(invoice.coupon_discount) > 0) {
+        const couponText = invoice.coupon_code ? `Coupon Disc. (${invoice.coupon_code.toUpperCase()}):` : 'Coupon Discount:';
+        doc.font('Helvetica-Bold').fillColor(secondaryColor).text(couponText, summaryX, currentY);
+        doc.font('Helvetica').fillColor(darkColor).text(`-₹${parseFloat(invoice.coupon_discount).toFixed(2)}`, 450, currentY, { width: 90, align: 'right' });
+        currentY += 16;
+      }
+
+      // Cash Discount Row (if any)
+      if (parseFloat(invoice.discount) > 0) {
+        doc.font('Helvetica-Bold').fillColor('#b91c1c').text('Cash Discount:', summaryX, currentY);
+        doc.font('Helvetica').fillColor(darkColor).text(`-₹${parseFloat(invoice.discount).toFixed(2)}`, 450, currentY, { width: 90, align: 'right' });
+        currentY += 16;
+      }
+
+      // Loyalty Points Discount Row (if any)
+      if (invoice.loyalty_discount && parseFloat(invoice.loyalty_discount) > 0) {
+        doc.font('Helvetica-Bold').fillColor(secondaryColor).text('Points Discount:', summaryX, currentY);
+        doc.font('Helvetica').fillColor(darkColor).text(`-₹${parseFloat(invoice.loyalty_discount).toFixed(2)}`, 450, currentY, { width: 90, align: 'right' });
+        currentY += 16;
+      }
+
+      // Split CGST and SGST Rows (50% each of total tax)
+      const totalTax = parseFloat(invoice.tax || 0);
+      const halfTax = totalTax / 2;
+
+      doc.font('Helvetica-Bold').fillColor(darkColor).text('CGST:', summaryX, currentY);
+      doc.font('Helvetica').text(`₹${halfTax.toFixed(2)}`, 450, currentY, { width: 90, align: 'right' });
+      currentY += 16;
+
+      doc.font('Helvetica-Bold').fillColor(darkColor).text('SGST:', summaryX, currentY);
+      doc.font('Helvetica').text(`₹${halfTax.toFixed(2)}`, 450, currentY, { width: 90, align: 'right' });
       currentY += 20;
 
       // Double Line separator before grand total

@@ -208,6 +208,9 @@ async function initDb() {
       tax ${numeric} DEFAULT 0,
       total ${numeric} NOT NULL,
       payment_method VARCHAR(50) NOT NULL, -- 'Cash', 'Card', 'UPI', 'Net Banking', 'Wallet'
+      razorpay_payment_id VARCHAR(100),
+      razorpay_qr_id VARCHAR(100),
+      payment_status VARCHAR(50) DEFAULT 'Pending',
       created_at ${datetime}
     )`,
 
@@ -270,6 +273,59 @@ async function initDb() {
       invoice_type VARCHAR(50) NOT NULL, -- 'Digital', 'Printed'
       delivery_status VARCHAR(50) NOT NULL, -- 'Pending', 'Sent', 'Failed', 'Printed'
       sent_at ${datetime}
+    )`,
+
+    // 15. Supplier Payments
+    `CREATE TABLE IF NOT EXISTS supplier_payments (
+      id ${serial},
+      supplier_id INTEGER NOT NULL,
+      amount ${numeric} NOT NULL,
+      payment_mode VARCHAR(50) NOT NULL,
+      transaction_ref VARCHAR(100),
+      created_at ${datetime}
+    )`,
+
+    // 16. Customer Payments
+    `CREATE TABLE IF NOT EXISTS customer_payments (
+      id ${serial},
+      customer_id INTEGER NOT NULL,
+      amount ${numeric} NOT NULL,
+      payment_mode VARCHAR(50) NOT NULL,
+      transaction_ref VARCHAR(100),
+      created_at ${datetime}
+    )`,
+
+    // 17. Inter-Branch Stock Transfers
+    `CREATE TABLE IF NOT EXISTS stock_transfers (
+      id ${serial},
+      transfer_number VARCHAR(100) NOT NULL UNIQUE,
+      product_id INTEGER NOT NULL,
+      from_branch_id INTEGER NOT NULL,
+      to_branch_id INTEGER NOT NULL,
+      quantity ${numeric} NOT NULL,
+      batch_number VARCHAR(50),
+      status VARCHAR(50) NOT NULL DEFAULT 'Pending',
+      received_quantity ${numeric} DEFAULT 0,
+      remarks TEXT,
+      created_by INTEGER,
+      created_at ${datetime},
+      updated_at ${datetime}
+    )`,
+
+    // 18. Promotions Catalog
+    `CREATE TABLE IF NOT EXISTS promotions (
+      id ${serial},
+      name VARCHAR(100) NOT NULL,
+      promo_type VARCHAR(50) NOT NULL, -- 'BOGO', 'Category', 'Coupon'
+      code VARCHAR(50) UNIQUE,
+      discount_pct ${numeric} DEFAULT 0,
+      category_id INTEGER,
+      buy_product_id INTEGER,
+      get_product_id INTEGER,
+      start_date ${dateType},
+      end_date ${dateType},
+      active INTEGER DEFAULT 1,
+      created_at ${datetime}
     )`
   ];
 
@@ -297,8 +353,73 @@ async function initDb() {
   }
 
   try {
+    await execute("ALTER TABLE products ADD COLUMN hsn_code VARCHAR(20) DEFAULT 'HSN-9988'");
+    console.log("Migration: Added 'hsn_code' column to 'products' table.");
+  } catch (err) {
+    // Column already exists, safe to ignore
+  }
+
+  try {
+    await execute("ALTER TABLE customers ADD COLUMN credit_limit NUMERIC(12,2) DEFAULT 10000.00");
+    console.log("Migration: Added 'credit_limit' column to 'customers' table.");
+  } catch (err) {
+    // Column already exists, safe to ignore
+  }
+
+  try {
+    await execute("ALTER TABLE sales ADD COLUMN loyalty_points_redeemed INTEGER DEFAULT 0");
+    console.log("Migration: Added 'loyalty_points_redeemed' column to 'sales' table.");
+  } catch (err) {
+    // Column already exists, safe to ignore
+  }
+
+  try {
+    await execute("ALTER TABLE sales ADD COLUMN loyalty_discount NUMERIC(12,2) DEFAULT 0.00");
+    console.log("Migration: Added 'loyalty_discount' column to 'sales' table.");
+  } catch (err) {
+    // Column already exists, safe to ignore
+  }
+
+  try {
     await execute("ALTER TABLE customers ADD COLUMN preferred_invoice_type VARCHAR(50) DEFAULT 'Printed'");
     console.log("Migration: Added 'preferred_invoice_type' column to 'customers' table.");
+  } catch (err) {
+    // Column already exists, safe to ignore
+  }
+
+  try {
+    await execute("ALTER TABLE sales ADD COLUMN razorpay_payment_id VARCHAR(100)");
+    await execute("ALTER TABLE sales ADD COLUMN razorpay_qr_id VARCHAR(100)");
+    await execute("ALTER TABLE sales ADD COLUMN payment_status VARCHAR(50) DEFAULT 'Pending'");
+    console.log("Migration: Added Razorpay UPI fields to 'sales' table.");
+  } catch (err) {
+    // Column already exists, safe to ignore
+  }
+
+  try {
+    await execute("ALTER TABLE sales ADD COLUMN tier_discount NUMERIC(12,2) DEFAULT 0.00");
+    console.log("Migration: Added 'tier_discount' column to 'sales' table.");
+  } catch (err) {
+    // Column already exists, safe to ignore
+  }
+
+  try {
+    await execute("ALTER TABLE sales ADD COLUMN promo_discount NUMERIC(12,2) DEFAULT 0.00");
+    console.log("Migration: Added 'promo_discount' column to 'sales' table.");
+  } catch (err) {
+    // Column already exists, safe to ignore
+  }
+
+  try {
+    await execute("ALTER TABLE sales ADD COLUMN coupon_discount NUMERIC(12,2) DEFAULT 0.00");
+    console.log("Migration: Added 'coupon_discount' column to 'sales' table.");
+  } catch (err) {
+    // Column already exists, safe to ignore
+  }
+
+  try {
+    await execute("ALTER TABLE sales ADD COLUMN coupon_code VARCHAR(50)");
+    console.log("Migration: Added 'coupon_code' column to 'sales' table.");
   } catch (err) {
     // Column already exists, safe to ignore
   }

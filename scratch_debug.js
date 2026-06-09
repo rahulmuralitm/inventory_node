@@ -2,20 +2,25 @@ const db = require('./db');
 
 async function checkDatabase() {
   try {
-    const sales = await db.query("SELECT id, invoice_number, created_at FROM sales ORDER BY id DESC LIMIT 10");
-    console.log("=== Latest Sales ===");
-    console.log(sales);
+    const columns = await db.query(
+      "SELECT column_name, data_type FROM information_schema.columns WHERE table_name = 'sales'"
+    );
+    console.log("=== Sales Table Columns ===");
+    columns.forEach(c => {
+      if (['tier_discount', 'promo_discount', 'coupon_discount', 'coupon_code'].includes(c.column_name)) {
+        console.log(`Column: ${c.column_name} (${c.data_type})`);
+      }
+    });
 
-    const history = await db.query("SELECT * FROM invoice_history ORDER BY id DESC LIMIT 10");
-    console.log("=== Latest History ===");
-    console.log(history);
+    const promos = await db.query("SELECT * FROM promotions LIMIT 5");
+    console.log("=== Active/Existing Promotions ===");
+    console.log(promos);
 
-    // Let's check columns and table existence
-    const tableCheck = await db.query(
+    const tables = await db.query(
       "SELECT table_name FROM information_schema.tables WHERE table_schema='public'"
     );
-    console.log("=== Tables in DB ===");
-    console.log(tableCheck.map(t => t.table_name));
+    console.log("=== Promotions Table Exists? ===");
+    console.log(tables.map(t => t.table_name).includes('promotions') ? 'Yes' : 'No');
   } catch (err) {
     console.error("Failed:", err.message);
   }
